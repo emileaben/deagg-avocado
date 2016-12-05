@@ -4,11 +4,13 @@
 import glob
 import os
 import sys
+import json
 import cPickle as pickle
 import subprocess
 import ipaddr
 import arrow
 import re
+import hashlib
 
 "TABLE_DUMP2|1476406525|B|193.242.98.143|35699|62.152.29.0/24|35699 174 8544 8544 8544 8544|IGP|193.242.98.143|0|0||NAG||"
 
@@ -19,6 +21,16 @@ class PfxStore:
         self.radix   = pickle.load( open('%s/radix.pickle' % basedir  ,'r') )
         self.as2pfx  = pickle.load( open('%s/as2pfx.pickle' % basedir ,'r') )
         print >>sys.stderr, "loaded!"
+
+    def peer_count( self, pfx ):
+        '''
+        get the peer count for a prefix
+        '''
+        pfx_file = pfx.replace('/','_')
+        pieces = re.split('[\.\:]', pfx)
+        subdir = pieces[0]
+        DIR = "/".join([ self.basedir ,subdir])
+        return sum(1 for line in open("/".join([DIR,pfx_file]),'r'))
 
     def routes_for_pfx( self, pfx ):
         '''
@@ -38,7 +50,7 @@ class PfxStore:
                 parts = parts[1:] # pop 'B'
                 peer_ip = parts.pop(0)
                 peer_asn = parts.pop(0)
-                peer_id = (peer_ip,peer_asn)
+                peer_id = "%s|%s" % (peer_ip,peer_asn)
                 parts.pop(0) # pop the prefix, which we know already
                 d[ peer_id ] = {'ts': ts, 'route': parts} # what's left
         return d
@@ -114,16 +126,137 @@ class PfxStore:
                 break
         return pairs
 
+def route_signature( p, r ):
+    '''
+    create a signature of how a route is propagates (as seen from peers)
+    sort and md5?
+    '''
+    sorted_peers = sorted( r.keys() )
+    sig = ''
+    for peer in sorted_peers:
+        #sig += "%s|%s" % ( peer, r[peer]['route'] )
+        sig += "%s" % ( peer, )
+    #print "%s %s" % ( len(sig), sig )
+    return hashlib.md5( sig ).hexdigest()
 
-DATE=sys.argv[1]
-adate=arrow.get( DATE )
-DATADIR='./data/%s' % ( adate.format('YYYY.MM.DD.HH') )
+def find_groups( p, pfxset ):
+    '''
+    find groups of similarly routed prefixes
+    '''
+    groups = {}
+    for pfx in pfxset:
+        r = p.routes_for_pfx( pfx )
+        # create a signature
+        rsig = route_signature( p, r )
+        # try to find the signature
+        if rsig in groups:
+            # add the pfx
+            groups[ rsig ]['pfx_set'].add( pfx )
+        else:
+            # it's a new one
+            groups[ rsig ] = {
+                'pfx_set': set([ pfx ]),
+                'route_set': r
+            }
+    return groups
 
-p = PfxStore( DATADIR )
+def ip_other_half( pfx ):
+    pfx_net, pfx_mask = pfx.split('/')
+    pfx_mask = int( pfx_mask )
+    if ':' in pfx:
+        this_half = ipaddr.IPv6Address( pfx_net )
+        other_half = ipaddr.IPv6Address( int(this_half) ^ 2 ** ( 128 - pfx_mask ) )
+    else:
+        this_half = ipaddr.IPv4Address( pfx_net )
+        other_half = ipaddr.IPv4Address( int(this_half) ^ 2 ** ( 32  - pfx_mask ) )
+    return "%s/%s" % ( other_half, pfx_mask )
 
-for asn,pfxset in p.as2pfx.iteritems():
-    pairs = p.findpairs( pfxset )
-    if len( pairs ) > 0:
-        pa_txt = p.analyse_pairs( pairs )
-        print "%s\t%s" % ( asn, pa_txt )
+def ip_1bit_less_specific( pfx ):
+    '''
+    find the 1bit less specific supernet of a prefix
+    '''
+    pfx_net, pfx_mask = pfx.split('/')
+    pfx_mask = int( pfx_mask )
+    super_mask = pfx_mask - 1
+    super_addr = None
+    if ':' in pfx:
+        this_net   = ipaddr.IPv6Address( pfx_net )
+        shift_mask = 128-super_mask
+        super_addr = ipaddr.IPv6Address( ( int(this_net) >> shift_mask ) << shift_mask )
+    else:
+        this_net   = ipaddr.IPv4Address( pfx_net )
+        shift_mask = 32-super_mask
+        super_addr = ipaddr.IPv4Address( ( int(this_net) >> shift_mask ) << shift_mask )
+    return "%s/%s" % ( super_addr, super_mask )
+
+def try_pfx_merge( p, pfx_set ):
+    '''
+    we have a set of prefixes with similar routing, now analyse them
+    '''
+    bymask = {}
+    for pfx in pfx_set:
+        pnet,pmask = pfx.split('/')
+        pmask = int( pmask )
+        if pmask == 0: # don't count default! #TODO maybe remove earlier?
+            continue
+        bymask.setdefault( pmask, set() )
+        bymask[ pmask ].add( pfx )
+    ## start at longest prefixes
+    masks_sorted = sorted( bymask.keys(), reverse=True )
+    merge_count = 0
+    merged_pfx_set = set()
+    for mask in masks_sorted:
+        while len( bymask[ mask ] ) > 0:
+            ## find the other side
+            p1 = bymask[ mask ].pop()
+            other_half = ip_other_half( p1 )
+            if other_half in bymask[ mask ]:
+                bymask[ mask ].remove( other_half )
+                merge_count += 1
+                one_bit_less_specific = ip_1bit_less_specific( p1 )
+                bymask.setdefault( mask-1, set() )
+                bymask[ mask-1 ].add( one_bit_less_specific )
+                ## find the higher up. see if it
+                ###TODO calculate the 1 bit up and insert it into the next set
+            else:
+                merged_pfx_set.add( p1 )
+    return merge_count, merged_pfx_set
+
+if __name__ == "__main__":
+    DATE=sys.argv[1]
+    adate=arrow.get( DATE )
+    DATADIR='./data/%s' % ( adate.format('YYYY.MM.DD.HH') )
+
+    p = PfxStore( DATADIR )
+
+    for asn,all_pfxset in p.as2pfx.iteritems():
+        '''
+        pairs = p.findpairs( pfxset )
+        if len( pairs ) > 0:
+            pa_txt = p.analyse_pairs( pairs )
+            print "%s\t%s" % ( asn, pa_txt )
+        '''
+        global_pfxset = set()
+        for pfx in all_pfxset:
+            # remove low visibility pfxes
+            if p.peer_count( pfx ) >= 20:
+                global_pfxset.add( pfx )
+        groups = find_groups( p, global_pfxset )
+        aggr_pfx_set = set()
+        merges = 0
+        for sig,g in groups.iteritems():
+            group_pfx_set = g['pfx_set']
+            ## now find if we can aggregate these in a useful manner!
+            merge_count, merged_pfx_set = try_pfx_merge( p, group_pfx_set )
+            merges += merge_count
+            aggr_pfx_set |= merged_pfx_set
+        j = {
+            'asn': asn,
+            'all_pfx_cnt': len( all_pfxset ),
+            'global_pfx_cnt': len( global_pfxset ),
+            'merge_cnt': merges,
+            'aggr_pfx_cnt': len( aggr_pfx_set ),
+            'group_cnt': len( groups.keys() )
+            }
+        print json.dumps( j )
 
