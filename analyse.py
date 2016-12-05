@@ -214,10 +214,9 @@ def try_pfx_merge( p, pfx_set ):
                 bymask[ mask ].remove( other_half )
                 merge_count += 1
                 one_bit_less_specific = ip_1bit_less_specific( p1 )
+                #TODO only add if it's not covered under this group already, but is in a different group?
                 bymask.setdefault( mask-1, set() )
                 bymask[ mask-1 ].add( one_bit_less_specific )
-                ## find the higher up. see if it
-                ###TODO calculate the 1 bit up and insert it into the next set
             else:
                 merged_pfx_set.add( p1 )
     return merge_count, merged_pfx_set
@@ -230,33 +229,37 @@ if __name__ == "__main__":
     p = PfxStore( DATADIR )
 
     for asn,all_pfxset in p.as2pfx.iteritems():
-        '''
-        pairs = p.findpairs( pfxset )
-        if len( pairs ) > 0:
-            pa_txt = p.analyse_pairs( pairs )
-            print "%s\t%s" % ( asn, pa_txt )
-        '''
-        global_pfxset = set()
+        all_pfxset_af = {
+            4: set(),
+            6: set()
+        }
         for pfx in all_pfxset:
-            # remove low visibility pfxes
-            if p.peer_count( pfx ) >= 20:
-                global_pfxset.add( pfx )
-        groups = find_groups( p, global_pfxset )
-        aggr_pfx_set = set()
-        merges = 0
-        for sig,g in groups.iteritems():
-            group_pfx_set = g['pfx_set']
-            ## now find if we can aggregate these in a useful manner!
-            merge_count, merged_pfx_set = try_pfx_merge( p, group_pfx_set )
-            merges += merge_count
-            aggr_pfx_set |= merged_pfx_set
-        j = {
+            if ':' in pfx:
+                all_pfxset_af[6].add( pfx )
+            else:
+                all_pfxset_af[4].add( pfx )
+        j = { # struct that holds it together
             'asn': asn,
-            'all_pfx_cnt': len( all_pfxset ),
-            'global_pfx_cnt': len( global_pfxset ),
-            'merge_cnt': merges,
-            'aggr_pfx_cnt': len( aggr_pfx_set ),
-            'group_cnt': len( groups.keys() )
-            }
+            'all_pfx_cnt': len( all_pfxset )
+        }
+        for af in (4,6):
+            global_pfxset = set()
+            j['all_pfx_v%d_cnt' % af] = len( all_pfxset_af[ af ] )
+            for pfx in all_pfxset_af[af]:
+                # remove low visibility pfxes
+                if p.peer_count( pfx ) >= 20:
+                    global_pfxset.add( pfx )
+            j['global_pfx_v%d_cnt' % af ] = len( global_pfxset )
+            groups = find_groups( p, global_pfxset )
+            j['group_v%d_cnt' % af] = len( groups )
+            aggr_pfx_set = set()
+            merges = 0
+            for sig,g in groups.iteritems():
+                group_pfx_set = g['pfx_set']
+                ## now find if we can aggregate these in a useful manner!
+                merge_count, merged_pfx_set = try_pfx_merge( p, group_pfx_set )
+                merges += merge_count
+                aggr_pfx_set |= merged_pfx_set
+            j['aggr_pfx_v%d_cnt' % af] = len( aggr_pfx_set )
         print json.dumps( j )
 
