@@ -193,6 +193,7 @@ def try_pfx_merge( p, pfx_set ):
     '''
     we have a set of prefixes with similar routing, now analyse them
     '''
+    ## bymask: groups prefixes by pfx length so we can analyse longest prefix first
     bymask = {}
     for pfx in pfx_set:
         pnet,pmask = pfx.split('/')
@@ -214,13 +215,27 @@ def try_pfx_merge( p, pfx_set ):
                 bymask[ mask ].remove( other_half )
                 merge_count += 1
                 one_bit_less_specific = ip_1bit_less_specific( p1 )
-                #TODO only add if it's not covered under this group already, but is in a different group?
                 bymask.setdefault( mask-1, set() )
                 bymask[ mask-1 ].add( one_bit_less_specific )
             else:
                 merged_pfx_set.add( p1 )
     return merge_count, merged_pfx_set
 
+def discard_aggregates_with_diff_routing_policy( groups, this_sig, merged_pfx_set ):
+    '''
+    compare the results of aggregation with the other groups of prefixes, and remove the prefixes that are
+    already in other groups of routing identity
+    '''
+    res_pfx_set = merged_pfx_set.copy() # result pfx set (may be a redundant copy, python boffins may know)
+    for sig,g in groups.iteritems():
+        if sig == this_sig:
+            continue
+        group_pfx_set = g['pfx_set']
+        for pfx in group_pfx_set:
+            if pfx in res_pfx_set:
+                res_pfx_set.remove( pfx )
+    return res_pfx_set
+        
 if __name__ == "__main__":
     DATE=sys.argv[1]
     adate=arrow.get( DATE )
@@ -253,6 +268,7 @@ if __name__ == "__main__":
             groups = find_groups( p, global_pfxset )
             j['group_v%d_cnt' % af] = len( groups )
             aggr_pfx_set = set()
+            aggr_pfx_no_up_diff_routing_set = set() ## removes the prefixes that were already present with different routing policy
             merges = 0
             for sig,g in groups.iteritems():
                 group_pfx_set = g['pfx_set']
@@ -260,6 +276,9 @@ if __name__ == "__main__":
                 merge_count, merged_pfx_set = try_pfx_merge( p, group_pfx_set )
                 merges += merge_count
                 aggr_pfx_set |= merged_pfx_set
+                ## see if any of the merged_pfx_set was already present for a different routing policy
+                aggr_pfx_no_up_diff_routing_set |= discard_aggregates_with_diff_routing_policy( groups, sig, merged_pfx_set )
             j['aggr_pfx_v%d_cnt' % af] = len( aggr_pfx_set )
+            j['aggr_no_te_pfx_v%d_cnt' % af] = len( aggr_pfx_no_up_diff_routing_set )
         print json.dumps( j )
 
