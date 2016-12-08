@@ -2,6 +2,7 @@
 ## put info for a single prefix into a single file (for later processing)
 ## input argument: date for which we have ris dump files
 import glob
+import numpy as np
 import os
 import sys
 import json
@@ -134,9 +135,7 @@ def route_signature( p, r ):
     sorted_peers = sorted( r.keys() )
     sig = ''
     for peer in sorted_peers:
-        #sig += "%s|%s" % ( peer, r[peer]['route'] )
-        sig += "%s" % ( peer, )
-    #print "%s %s" % ( len(sig), sig )
+        sig += "%s|%s" % ( peer, r[peer]['route'] )
     return hashlib.md5( sig ).hexdigest()
 
 def find_groups( p, pfxset ):
@@ -202,24 +201,26 @@ def try_pfx_merge( p, pfx_set ):
             continue
         bymask.setdefault( pmask, set() )
         bymask[ pmask ].add( pfx )
-    ## start at longest prefixes
-    masks_sorted = sorted( bymask.keys(), reverse=True )
-    merge_count = 0
+    ## start at longest prefixes, and work up until you don't find prefixes anymore
+    mask = max( bymask.keys() )
     merged_pfx_set = set()
-    for mask in masks_sorted:
-        while len( bymask[ mask ] ) > 0:
-            ## find the other side
-            p1 = bymask[ mask ].pop()
-            other_half = ip_other_half( p1 )
-            if other_half in bymask[ mask ]:
-                bymask[ mask ].remove( other_half )
-                merge_count += 1
-                one_bit_less_specific = ip_1bit_less_specific( p1 )
-                bymask.setdefault( mask-1, set() )
-                bymask[ mask-1 ].add( one_bit_less_specific )
-            else:
-                merged_pfx_set.add( p1 )
-    return merge_count, merged_pfx_set
+    while len( bymask.keys() ) > 0:
+        if mask in bymask:
+            while len( bymask[ mask ] ) > 0:
+                ## find the other side
+                p1 = bymask[ mask ].pop()
+                other_half = ip_other_half( p1 )
+                if other_half in bymask[ mask ]:
+                    bymask[ mask ].remove( other_half )
+                    one_bit_less_specific = ip_1bit_less_specific( p1 )
+                    bymask.setdefault( mask-1, set() )
+                    bymask[ mask-1 ].add( one_bit_less_specific )
+                else:
+                   merged_pfx_set.add( p1 )
+            del bymask[ mask ]
+        # walk to one-bit less specific
+        mask -= 1
+    return merged_pfx_set
 
 def discard_aggregates_with_diff_routing_policy( groups, this_sig, merged_pfx_set ):
     '''
@@ -235,7 +236,13 @@ def discard_aggregates_with_diff_routing_policy( groups, this_sig, merged_pfx_se
             if pfx in res_pfx_set:
                 res_pfx_set.remove( pfx )
     return res_pfx_set
-        
+
+def pfxset_lengths( pfxset ):
+    return map( lambda x: int( x.split('/')[1] ), pfxset )
+
+def pfxset_avg_len( pfxset ):
+    return 1.0*sum( map( lambda x: int( x.split('/')[1] ), pfxset ) ) / len(pfxset)
+
 if __name__ == "__main__":
     DATE=sys.argv[1]
     adate=arrow.get( DATE )
@@ -268,17 +275,28 @@ if __name__ == "__main__":
             groups = find_groups( p, global_pfxset )
             j['group_v%d_cnt' % af] = len( groups )
             aggr_pfx_set = set()
-            aggr_pfx_no_up_diff_routing_set = set() ## removes the prefixes that were already present with different routing policy
-            merges = 0
+            ######## next line didn't result in many prefixes removed from the set. either it's a rare case, or there is a bug in the code
+            ### aggr_pfx_no_up_diff_routing_set = set() ## removes the prefixes that were already present with different routing policy
             for sig,g in groups.iteritems():
+                ja = {} # struct to dump to json for the 'atom'/'group'
+                ja['atom_id'] = "%s-%s-%s" % ( asn, af, sig )
                 group_pfx_set = g['pfx_set']
-                ## now find if we can aggregate these in a useful manner!
-                merge_count, merged_pfx_set = try_pfx_merge( p, group_pfx_set )
-                merges += merge_count
-                aggr_pfx_set |= merged_pfx_set
+                ja['pfx_cnt'] = len(group_pfx_set)
+                if len( group_pfx_set ) > 0: # can happen for filtering out non-globally routed prefixes
+                    ja['pfx_avg_len'] = pfxset_avg_len( group_pfx_set )
+                    ja['pfx_med_len'] = np.percentile(pfxset_lengths( group_pfx_set ), 50)
+                    ## now find if we can aggregate these in a useful manner!
+                    merged_pfx_set = try_pfx_merge( p, group_pfx_set )
+                    ja['aggr_pfx_cnt'] =  len( merged_pfx_set )
+                    if len( merged_pfx_set ) == 0:
+                        raise ValueError("merge to 0?!, for %s" % (group_pfx_set) )
+                    ja['aggr_pfx_avg_len'] = pfxset_avg_len( merged_pfx_set )
+                    ja['aggr_pfx_med_len'] = np.percentile(pfxset_lengths( merged_pfx_set ), 50)
+                    aggr_pfx_set |= merged_pfx_set
                 ## see if any of the merged_pfx_set was already present for a different routing policy
-                aggr_pfx_no_up_diff_routing_set |= discard_aggregates_with_diff_routing_policy( groups, sig, merged_pfx_set )
+                ##REMOVED## aggr_pfx_no_up_diff_routing_set |= discard_aggregates_with_diff_routing_policy( groups, sig, merged_pfx_set )
+                print json.dumps( ja )
             j['aggr_pfx_v%d_cnt' % af] = len( aggr_pfx_set )
-            j['aggr_no_te_pfx_v%d_cnt' % af] = len( aggr_pfx_no_up_diff_routing_set )
+            ##REMOVED j['aggr_no_te_pfx_v%d_cnt' % af] = len( aggr_pfx_no_up_diff_routing_set )
         print json.dumps( j )
 
