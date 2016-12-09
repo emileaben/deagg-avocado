@@ -280,9 +280,10 @@ if __name__ == "__main__":
             for sig,g in groups.iteritems():
                 ja = {} # struct to dump to json for the 'atom'/'group'
                 ja['atom_id'] = "%s-%s-%s" % ( asn, af, sig )
+                #ja['route_set'] = g['route_set'] ## THIS IS BIG
                 group_pfx_set = g['pfx_set']
                 ja['pfx_cnt'] = len(group_pfx_set)
-                if len( group_pfx_set ) > 0: # can happen for filtering out non-globally routed prefixes
+                if len( group_pfx_set ) > 0: # 0 can happen for filtering out non-globally routed prefixes
                     ja['pfx_avg_len'] = pfxset_avg_len( group_pfx_set )
                     ja['pfx_med_len'] = np.percentile(pfxset_lengths( group_pfx_set ), 50)
                     ## now find if we can aggregate these in a useful manner!
