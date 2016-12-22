@@ -7,6 +7,7 @@ import os
 import sys
 import json
 import cPickle as pickle
+import radix
 import subprocess
 import ipaddr
 import arrow
@@ -21,7 +22,15 @@ class PfxStore:
         self.basedir = basedir
         self.radix   = pickle.load( open('%s/radix.pickle' % basedir  ,'r') )
         self.as2pfx  = pickle.load( open('%s/as2pfx.pickle' % basedir ,'r') )
+        ## ignore_peers: these are the route-collector peers that are to be ignored
+        self.ignore_peers = radix.Radix()
+        self.has_ignore_peers = False # to avoid a lot of radix lookups
         print >>sys.stderr, "loaded!"
+
+    def set_ignore_peers( self, pfx_list ):
+        for p in pfx_list:
+            self.ignore_peers.add( p )
+        self.has_ignore_peers = True # need to do a lot of radix lookups now
 
     def peer_count( self, pfx ):
         '''
@@ -36,6 +45,7 @@ class PfxStore:
     def routes_for_pfx( self, pfx ):
         '''
         load routes for a particular prefix into a data structure. keyed by peer_ip/peer_asn
+        ignores routes in self.ignore_peers if that is set
         '''
         d = {}
         pfx_file = pfx.replace('/','_')
@@ -50,6 +60,11 @@ class PfxStore:
                 ts = int(parts.pop(0))
                 parts = parts[1:] # pop 'B'
                 peer_ip = parts.pop(0)
+                if self.has_ignore_peers == True:
+                    ignore_match = self.ignore_peers.search_best( peer_ip )
+                    if ignore_match:
+                        #print >>sys.stderr, "ignoring peer_ip: %s" % ( peer_ip )
+                        continue
                 peer_asn = parts.pop(0)
                 peer_id = "%s|%s" % (peer_ip,peer_asn)
                 parts.pop(0) # pop the prefix, which we know already
@@ -247,8 +262,14 @@ if __name__ == "__main__":
     DATE=sys.argv[1]
     adate=arrow.get( DATE )
     DATADIR='./data/%s' % ( adate.format('YYYY.MM.DD.HH') )
+    # ignore peers has the pfxes that the peers to be ignored are in
+    ### this is for sensitivity analysis
 
     p = PfxStore( DATADIR )
+    ## FOR BRAZIL
+    #IGNORE_PEERS = ['187.16.216.0/21','2001:12f8::/64']
+    #p.set_ignore_peers( IGNORE_PEERS )
+    ## TODO: FOR South Africa
 
     for asn,all_pfxset in p.as2pfx.iteritems():
         all_pfxset_af = {
