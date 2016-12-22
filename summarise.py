@@ -15,7 +15,8 @@ for af in (4,6):
     out[af] = {
         'global_pfx_cnt': 0,
         'aggr_pfx_cnt': 0,
-        'aggr_no_te_pfx_cnt': 0
+        'aggr_no_te_pfx_cnt': 0,
+        'group_cnt': 0
     }
 
 asn_cnt = 0
@@ -38,12 +39,14 @@ with open( sys.argv[1] ) as inf:
             for af in (4,6):
                 out[af]['global_pfx_cnt'] += d['global_pfx_v%d_cnt' % af ]
                 out[af]['aggr_pfx_cnt'] += d['aggr_pfx_v%d_cnt' % af ]
+                out[af]['group_cnt'] += d['group_v%d_cnt' % af ]
                 #out[af]['aggr_no_te_pfx_cnt'] += d['aggr_no_te_pfx_v%d_cnt' % af ]
 
 print "ASNs analysed: %d" % asn_cnt
 for af in (4,6):
     print "IPv%d 'global' prefixes: %d" % (af, out[af]['global_pfx_cnt'])
     print "IPv%d 'global max aggregated' prefixes: %d" % (af, out[af]['aggr_pfx_cnt'])
+    print "IPv%d groups: %d" % (af, out[af]['group_cnt'])
     #print "IPv%d 'global max aggregated' (after TE-removal) prefixes: %d" % (af, out[af]['aggr_no_te_pfx_cnt'])
     print "IPv%d max_aggregate/global %.1f%%" % (af, 100.0* out[af]['aggr_pfx_cnt'] / out[af]['global_pfx_cnt'])
     #print "IPv%d max_aggregate_no_te/global %.1f%%" % (af, 100.0* out[af]['aggr_no_te_pfx_cnt'] / out[af]['global_pfx_cnt'])
