@@ -26,21 +26,26 @@ h_avg_shift = []
 
 with open( sys.argv[1] ) as inf:
     for line in inf:
-        d = json.loads( line )
-        if not 'asn' in d:
-            ## it's a group
-            heapq.heappush(h_avg_shift, ( int(1000*(d['aggr_pfx_avg_len'] - d['pfx_avg_len'])), d ) )
-            #h_len += 1
-            #if h_len > 100: # cull list
-            #    h_avg_shift = h_avg_shift[0:10]
-            #    h_len = 0
-        else:
-            asn_cnt += 1
-            for af in (4,6):
-                out[af]['global_pfx_cnt'] += d['global_pfx_v%d_cnt' % af ]
-                out[af]['aggr_pfx_cnt'] += d['aggr_pfx_v%d_cnt' % af ]
-                out[af]['group_cnt'] += d['group_v%d_cnt' % af ]
-                #out[af]['aggr_no_te_pfx_cnt'] += d['aggr_no_te_pfx_v%d_cnt' % af ]
+        if line.startswith('#'):
+            continue
+        try:
+            d = json.loads( line )
+            if not 'asn' in d:
+                ## it's a group
+                heapq.heappush(h_avg_shift, ( int(1000*( len( d['aggr_pfx_list'] ) - len( d['pfx_list']) ) ), d ) )
+                #h_len += 1
+                #if h_len > 100: # cull list
+                #    h_avg_shift = h_avg_shift[0:10]
+                #    h_len = 0
+            else:
+                asn_cnt += 1
+                for af in (4,6):
+                    out[af]['global_pfx_cnt'] += d['global_pfx_v%d_cnt' % af ]
+                    out[af]['aggr_pfx_cnt'] += d['aggr_pfx_v%d_cnt' % af ]
+                    out[af]['group_cnt'] += d['group_v%d_cnt' % af ]
+                    #out[af]['aggr_no_te_pfx_cnt'] += d['aggr_no_te_pfx_v%d_cnt' % af ]
+        except:
+            print >>sys.stderr, "error reading line (but continuing): %s" % ( line )
 
 print "ASNs analysed: %d" % asn_cnt
 for af in (4,6):
@@ -52,8 +57,8 @@ for af in (4,6):
     #print "IPv%d max_aggregate_no_te/global %.1f%%" % (af, 100.0* out[af]['aggr_no_te_pfx_cnt'] / out[af]['global_pfx_cnt'])
 
 ### biggest shifts in avg_len
-print "largest shifts in avg pfx size for atoms"
-for h in heapq.nsmallest(25, h_avg_shift):
-    print "shift:%s data: %s" % (-h[0]/1000.0, h[1])
+#print "largest shifts in avg pfx size for atoms"
+#for h in heapq.nsmallest(25, h_avg_shift):
+#    print "shift:%s data: %s" % (-h[0]/1000.0, h[1])
 
 
