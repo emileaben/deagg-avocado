@@ -153,15 +153,33 @@ def route_signature( p, r ):
         sig += "%s|%s" % ( peer, r[peer]['route'] )
     return hashlib.md5( sig ).hexdigest()
 
-def find_groups( p, pfxset ):
+def route_signature_path_only( p, r ):
+    '''
+    create a signature of how a route is propagates (as seen from peers)
+    sort and md5?
+    '''
+    sorted_peers = sorted( r.keys() )
+    sig = ''
+    for peer in sorted_peers:
+        #sig += "%s|%s" % ( peer, r[peer]['route'] )
+        # only consider the first attribute, which is path:
+        sig += "%s|%s" % ( peer, r[peer]['route'][0] )
+    return hashlib.md5( sig ).hexdigest()
+
+def find_groups( p, pfxset, consider_only_path=False ):
     '''
     find groups of similarly routed prefixes
     '''
     groups = {}
+    #print >>sys.stderr, "finding groups, consider_only_paths:%s" % ( consider_only_path )
     for pfx in pfxset:
         r = p.routes_for_pfx( pfx )
         # create a signature
-        rsig = route_signature( p, r )
+        rsig = None
+        if consider_only_path == False:
+            rsig = route_signature( p, r )
+        else:
+            rsig = route_signature_path_only( p, r )
         # try to find the signature
         if rsig in groups:
             # add the pfx
@@ -172,6 +190,10 @@ def find_groups( p, pfxset ):
                 'pfx_set': set([ pfx ]),
                 'route_set': r
             }
+            if consider_only_path == True:
+                # this chops off all other attributes for the route that is stored per peer
+                for peer in groups[ rsig ]['route_set']:
+                    groups[ rsig ]['route_set'][ peer ]['route'] = [ groups[ rsig ]['route_set'][ peer ]['route'][0] ]
     return groups
 
 def ip_other_half( pfx ):
@@ -258,18 +280,40 @@ def pfxset_lengths( pfxset ):
 def pfxset_avg_len( pfxset ):
     return 1.0*sum( map( lambda x: int( x.split('/')[1] ), pfxset ) ) / len(pfxset)
 
+def read_config():
+    conf = {}
+    conf_file = "config.json"
+    try:
+        with open('config.json','r') as inf:
+            conf = json.load( inf )
+    except:
+        print >>sys.stderr, "error reading conf file: %s" % conf_file
+        raise
+    return conf
+
 if __name__ == "__main__":
-    DATE=sys.argv[1]
+    conf = read_config()
+    if not 'date' in conf:
+        print >>sys.stderr, "no 'date' in config.json, exiting"
+        sys.exit(0)
+    DATE=conf['date']
     adate=arrow.get( DATE )
     DATADIR='./data/%s' % ( adate.format('YYYY.MM.DD.HH') )
+    p = PfxStore( DATADIR )
+
     # ignore peers has the pfxes that the peers to be ignored are in
     ### this is for sensitivity analysis
-
-    p = PfxStore( DATADIR )
+    # expects a list
+    if 'ignore_peers' in conf:
+        p.set_ignore_peers( conf['ignore_peers'] )
+    CONSIDER_ONLY_PATH=False
+    if 'consider_only_path' in conf:
+        CONSIDER_ONLY_PATH=conf['consider_only_path']
     ## FOR BRAZIL
     #IGNORE_PEERS = ['187.16.216.0/21','2001:12f8::/64']
-    #p.set_ignore_peers( IGNORE_PEERS )
     ## TODO: FOR South Africa
+    # print the config to stdout, so we know what was used
+    print "### %s" % json.dumps( conf )
 
     for asn,all_pfxset in p.as2pfx.iteritems():
         all_pfxset_af = {
@@ -293,7 +337,7 @@ if __name__ == "__main__":
                 if p.peer_count( pfx ) >= 20:
                     global_pfxset.add( pfx )
             j['global_pfx_v%d_cnt' % af ] = len( global_pfxset )
-            groups = find_groups( p, global_pfxset )
+            groups = find_groups( p, global_pfxset, consider_only_path=CONSIDER_ONLY_PATH )
             j['group_v%d_cnt' % af] = len( groups )
             aggr_pfx_set = set()
             ######## next line didn't result in many prefixes removed from the set. either it's a rare case, or there is a bug in the code
@@ -303,17 +347,13 @@ if __name__ == "__main__":
                 ja['atom_id'] = "%s-%s-%s" % ( asn, af, sig )
                 #ja['route_set'] = g['route_set'] ## THIS IS BIG
                 group_pfx_set = g['pfx_set']
-                ja['pfx_cnt'] = len(group_pfx_set)
+                ja['pfx_list'] = list( group_pfx_set )
                 if len( group_pfx_set ) > 0: # 0 can happen for filtering out non-globally routed prefixes
-                    ja['pfx_avg_len'] = pfxset_avg_len( group_pfx_set )
-                    ja['pfx_med_len'] = np.percentile(pfxset_lengths( group_pfx_set ), 50)
                     ## now find if we can aggregate these in a useful manner!
                     merged_pfx_set = try_pfx_merge( p, group_pfx_set )
-                    ja['aggr_pfx_cnt'] =  len( merged_pfx_set )
+                    ja['aggr_pfx_list'] =  list( merged_pfx_set )
                     if len( merged_pfx_set ) == 0:
                         raise ValueError("merge to 0?!, for %s" % (group_pfx_set) )
-                    ja['aggr_pfx_avg_len'] = pfxset_avg_len( merged_pfx_set )
-                    ja['aggr_pfx_med_len'] = np.percentile(pfxset_lengths( merged_pfx_set ), 50)
                     aggr_pfx_set |= merged_pfx_set
                 ## see if any of the merged_pfx_set was already present for a different routing policy
                 ##REMOVED## aggr_pfx_no_up_diff_routing_set |= discard_aggregates_with_diff_routing_policy( groups, sig, merged_pfx_set )
